@@ -3,6 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import random
+from postprocess import keep_one_component
 
 import cv2
 import numpy as np
@@ -40,6 +41,8 @@ def main():
     ap.add_argument("--n", type=int, default=12)
     ap.add_argument("--thr", type=float, default=0.5)
     ap.add_argument("--out_dir", default="runs/needle_convlstm/debug_preds")
+    ap.add_argument("--postprocess", choices=["none", "largest", "longest"], default="none")
+    ap.add_argument("--min_area", type=int, default=20)
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -78,6 +81,7 @@ def main():
         logits = model(xb)              # (1,1,H,W)
         probs = torch.sigmoid(logits)[0, 0].detach().cpu().numpy()
         pred = (probs > args.thr).astype(np.uint8)
+        pred = keep_one_component(pred, mode=args.postprocess, min_area=args.min_area)
 
         gt = y[0].cpu().numpy().astype(np.uint8)
 

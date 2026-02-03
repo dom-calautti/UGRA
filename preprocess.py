@@ -65,6 +65,28 @@ def decode_cvat_rle_foreground_first(rle_str: str, w: int, h: int) -> np.ndarray
 
     return flat.reshape((h, w))
 
+def decode_cvat_rle(rle_str: str, w: int, h: int, foreground_first: bool) -> np.ndarray:
+    """
+    Decode CVAT 1.1 RLE into binary mask (h,w).
+    Some labels export as foreground-first, others background-first.
+    """
+    runs = [int(x) for x in rle_str.split(",") if x.strip()]
+    total = w * h
+    flat = np.zeros(total, dtype=np.uint8)
+
+    idx = 0
+    val = 1 if foreground_first else 0
+    for run in runs:
+        if idx >= total:
+            break
+        end = min(idx + run, total)
+        if val == 1:
+            flat[idx:end] = 1
+        idx = end
+        val = 1 - val
+
+    return flat.reshape((h, w))
+
 
 def paste_local_mask(global_mask: np.ndarray, local_mask: np.ndarray, left: int, top: int, value: int):
     """
@@ -287,12 +309,15 @@ def main():
             if mw <= 0 or mh <= 0:
                 continue
 
-            local = decode_cvat_rle_foreground_first(rle, mw, mh)
+            is_needle = (label == args.needle_label)
+            local = decode_cvat_rle(rle, mw, mh, foreground_first=is_needle)
+
 
             if label in anatomy_map:
                 paste_local_mask(anatomy_mask, local, left, top, anatomy_map[label])
 
             if label == args.needle_label:
+                local = 1 - local  # needle inversion flip
                 paste_local_mask(needle_mask, local, left, top, 1)
 
         has_needle = int(needle_mask.sum() > 0)
