@@ -1,12 +1,6 @@
 # preprocess.py
 # Phase 1 preprocessing for CVAT 1.1 (images) -> masks + metadata + temporal sequence manifests
 #
-# Assumptions (matches your setup):
-#   - You run this script from project root
-#   - data_raw/annotations.xml exists
-#   - data_raw/images/ contains frames (e.g., 0_frame_0.jpg)
-#   - In XML, image names are like: "images/0_frame_0.jpg"
-#
 # Outputs:
 #   data_processed/
 #     masks/anatomy/*.png   (0=bg, 1=nerve, 2=artery, 3=muscle)
@@ -26,7 +20,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageEnhance
 
-
 # filename format: "<video>_frame_<frame>.jpg"
 FILENAME_RE = re.compile(r"^(?P<vid>\d+)_frame_(?P<fid>\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
 
@@ -38,37 +31,14 @@ def parse_vid_fid(filename: str):
     return int(m.group("vid")), int(m.group("fid"))
 
 
-def decode_cvat_rle_foreground_first(rle_str: str, w: int, h: int) -> np.ndarray:
-    """
-    Decode CVAT 1.1 mask RLE into a binary mask (h, w).
-
-    IMPORTANT:
-      In many CVAT exports, the RLE alternates runs of 1s and 0s starting with 1s (foreground-first).
-      Your earlier output produced all-black masks with background-first; this fixes that.
-
-    If you *still* see empty masks, we may need to flip ordering (rare) or reshape order (rarer).
-    """
-    runs = [int(x) for x in rle_str.split(",") if x.strip()]
-    total = w * h
-    flat = np.zeros(total, dtype=np.uint8)
-
-    idx = 0
-    val = 1  # foreground-first
-    for run in runs:
-        if idx >= total:
-            break
-        end = min(idx + run, total)
-        if val == 1:
-            flat[idx:end] = 1
-        idx = end
-        val = 1 - val
-
-    return flat.reshape((h, w))
-
 def decode_cvat_rle(rle_str: str, w: int, h: int, foreground_first: bool) -> np.ndarray:
     """
     Decode CVAT 1.1 RLE into binary mask (h,w).
+
     Some labels export as foreground-first, others background-first.
+    We control this via foreground_first.
+
+    Returns: uint8 mask with values {0,1}
     """
     runs = [int(x) for x in rle_str.split(",") if x.strip()]
     total = w * h
@@ -135,7 +105,6 @@ def save_mask(mask: np.ndarray, out_path: Path, mode: str):
     Image.fromarray(vis, mode="L").save(out_path)
 
 
-
 def make_overlay(image_path: Path, mask: np.ndarray, out_path: Path, mode: str):
     """
     Sanity overlay to verify masks align with pixels.
@@ -166,7 +135,7 @@ def build_sequences(rows, split_name: str, window: int, stride: int, target: str
     Build causal temporal windows ending at frame i (predict last frame).
     target: "anatomy" or "needle"
     needle_pos_only: if True, only sequences whose target frame has needle.
-    min_frames: videos with < min_frames are skipped (useful for temporal modeling).
+    min_frames: videos with < min_frames are skipped.
     """
     sequences = []
 
@@ -186,7 +155,7 @@ def build_sequences(rows, split_name: str, window: int, stride: int, target: str
             if target == "needle" and needle_pos_only and tgt["has_needle"] != 1:
                 continue
 
-            window_rows = vrows[i - window + 1 : i + 1]
+            window_rows = vrows[i - window + 1: i + 1]
 
             sequences.append({
                 "video_id": vid,
@@ -221,9 +190,15 @@ def main():
     ap.add_argument("--artery_label", default="Femoral Artery", help="Exact CVAT label name for artery")
     ap.add_argument("--muscle_label", default="Sartorius Muscle", help="Exact CVAT label name for muscle")
 
-    ap.add_argument("--window", type=int, default=8, help="Temporal window length T")
+    # Default window + per-task overrides
+    ap.add_argument("--window", type=int, default=8, help="Default temporal window length T")
+    ap.add_argument("--needle_window", type=int, default=0, help="Override T for needle sequences (0 = use --window)")
+    ap.add_argument("--anatomy_window", type=int, default=0, help="Override T for anatomy sequences (0 = use --window)")
+
     ap.add_argument("--stride", type=int, default=1, help="Stride for sequence generation")
-    ap.add_argument("--min_frames_for_temporal", type=int, default=8, help="Skip videos shorter than this for sequences")
+    ap.add_argument("--min_frames_for_temporal", type=int, default=8, help="Default: skip videos shorter than this for sequences")
+    ap.add_argument("--needle_min_frames_for_temporal", type=int, default=0, help="Override min frames for needle (0 = use default)")
+    ap.add_argument("--anatomy_min_frames_for_temporal", type=int, default=0, help="Override min frames for anatomy (0 = use default)")
 
     ap.add_argument("--overlay_samples", type=int, default=15, help="How many overlays to save per type")
 
@@ -277,12 +252,10 @@ def main():
         vid, fid = parse_vid_fid(basename)
         if vid is None:
             skipped.append(xml_name)
-            # keep warn but don't spam too hard
             if len(skipped) <= 25:
                 print(f"[WARN] Skipping filename that doesn't match pattern: {xml_name}")
             continue
 
-        # IMPORTANT: your disk has basenames in data_raw/images/
         img_path = images_dir / basename
         if not img_path.exists():
             missing_imgs += 1
@@ -312,12 +285,12 @@ def main():
             is_needle = (label == args.needle_label)
             local = decode_cvat_rle(rle, mw, mh, foreground_first=is_needle)
 
-
             if label in anatomy_map:
                 paste_local_mask(anatomy_mask, local, left, top, anatomy_map[label])
 
-            if label == args.needle_label:
-                local = 1 - local  # needle inversion flip
+            if is_needle:
+                # needle flip (this matched your "needle looks right now" behavior)
+                local = 1 - local
                 paste_local_mask(needle_mask, local, left, top, 1)
 
         has_needle = int(needle_mask.sum() > 0)
@@ -334,7 +307,7 @@ def main():
         anat_path = masks_anatomy_dir / f"{stem}.png"
         need_path = masks_needle_dir / f"{stem}.png"
 
-        save_mask(anatomy_mask, anat_path,mode="anatomy")
+        save_mask(anatomy_mask, anat_path, mode="anatomy")
         save_mask(needle_mask, need_path, mode="needle")
 
         rows.append({
@@ -351,7 +324,6 @@ def main():
             "height": H,
         })
 
-    # Write skipped list
     (meta_dir / "skipped_files.txt").write_text("\n".join(sorted(set(skipped))))
     print(f"[INFO] Skipped {len(skipped)} non-video-style filenames. List saved to meta/skipped_files.txt")
 
@@ -372,6 +344,14 @@ def main():
             w.writerow(r)
     print("[DONE] Wrote", frames_csv)
 
+    # Resolve windows/min-frames (defaults + per-task overrides)
+    stride = args.stride
+    needle_window = args.needle_window if args.needle_window and args.needle_window > 0 else args.window
+    anatomy_window = args.anatomy_window if args.anatomy_window and args.anatomy_window > 0 else args.window
+
+    needle_min_frames = args.needle_min_frames_for_temporal if args.needle_min_frames_for_temporal and args.needle_min_frames_for_temporal > 0 else args.min_frames_for_temporal
+    anatomy_min_frames = args.anatomy_min_frames_for_temporal if args.anatomy_min_frames_for_temporal and args.anatomy_min_frames_for_temporal > 0 else args.min_frames_for_temporal
+
     # splits.json
     all_videos = sorted({r["video_id"] for r in rows})
     train_videos = sorted([v for v in all_videos if v not in val_videos and v not in test_videos])
@@ -381,6 +361,15 @@ def main():
         "test_videos": sorted(list(test_videos)),
         "all_videos": all_videos,
         "note": "Splits are by video_id. Filenames are parsed from '<video>_frame_<frame>.<ext>'. XML names may include 'images/' prefix.",
+        "temporal": {
+            "default_window": args.window,
+            "needle_window": needle_window,
+            "anatomy_window": anatomy_window,
+            "stride": stride,
+            "default_min_frames": args.min_frames_for_temporal,
+            "needle_min_frames": needle_min_frames,
+            "anatomy_min_frames": anatomy_min_frames,
+        },
     }
     splits_path = meta_dir / "splits.json"
     splits_path.write_text(json.dumps(splits, indent=2))
@@ -399,23 +388,19 @@ def main():
         print(f"  video {v}: frames={per_vid[v]['frames']}, needle_pos={per_vid[v]['needle_pos']}")
 
     # Build sequences
-    window = args.window
-    stride = args.stride
-    min_frames = args.min_frames_for_temporal
-
     rows_train = [r for r in rows if r["split"] == "train"]
     rows_val = [r for r in rows if r["split"] == "val"]
     rows_test = [r for r in rows if r["split"] == "test"]
 
     # anatomy sequences (all targets)
-    seq_anat_train = build_sequences(rows_train, "train", window, stride, "anatomy", needle_pos_only=False, min_frames=min_frames)
-    seq_anat_val = build_sequences(rows_val, "val", window, stride, "anatomy", needle_pos_only=False, min_frames=min_frames)
-    seq_anat_test = build_sequences(rows_test, "test", window, stride, "anatomy", needle_pos_only=False, min_frames=min_frames)
+    seq_anat_train = build_sequences(rows_train, "train", anatomy_window, stride, "anatomy", needle_pos_only=False, min_frames=anatomy_min_frames)
+    seq_anat_val = build_sequences(rows_val, "val", anatomy_window, stride, "anatomy", needle_pos_only=False, min_frames=anatomy_min_frames)
+    seq_anat_test = build_sequences(rows_test, "test", anatomy_window, stride, "anatomy", needle_pos_only=False, min_frames=anatomy_min_frames)
 
     # needle sequences (only needle-positive targets)
-    seq_need_train = build_sequences(rows_train, "train", window, stride, "needle", needle_pos_only=True, min_frames=min_frames)
-    seq_need_val = build_sequences(rows_val, "val", window, stride, "needle", needle_pos_only=True, min_frames=min_frames)
-    seq_need_test = build_sequences(rows_test, "test", window, stride, "needle", needle_pos_only=True, min_frames=min_frames)
+    seq_need_train = build_sequences(rows_train, "train", needle_window, stride, "needle", needle_pos_only=True, min_frames=needle_min_frames)
+    seq_need_val = build_sequences(rows_val, "val", needle_window, stride, "needle", needle_pos_only=True, min_frames=needle_min_frames)
+    seq_need_test = build_sequences(rows_test, "test", needle_window, stride, "needle", needle_pos_only=True, min_frames=needle_min_frames)
 
     dump_json(meta_dir / "sequences_anatomy_train.json", seq_anat_train)
     dump_json(meta_dir / "sequences_anatomy_val.json", seq_anat_val)
@@ -443,6 +428,7 @@ def main():
 
     print("[DONE] Sanity overlays saved to", overlay_dir.resolve())
     print("[NEXT] Open sanity_overlays/*.png and verify masks align (and that masks are not all black).")
+    print(f"[INFO] needle_window={needle_window} anatomy_window={anatomy_window} stride={stride}")
 
 
 if __name__ == "__main__":
