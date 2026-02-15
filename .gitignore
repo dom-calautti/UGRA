@@ -1,5 +1,6 @@
 runs/needle_convlstm/
-runs\anatomy_convlstm
+runs/anatomy_convlstm/
+
 
 UGRA/data_raw/
 UGRA/data_raw/images/
