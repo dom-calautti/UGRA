@@ -85,66 +85,55 @@ class ConvLSTMCell(nn.Module):
 
 class ConvLSTMUNet(nn.Module):
     """
-    Temporal UNet:
-      - Encode each frame with UNet encoder (shared weights)
-      - Run ConvLSTM at bottleneck across time (memory)
-      - Decode using last-frame skips + ConvLSTM bottleneck state
-      - Predict mask for last frame
-
     Input:  x (B, T, 1, H, W)
-    Output: logits (B, 1, H, W)  (apply sigmoid outside)
+    Output:
+      - needle: logits (B, 1, H, W)
+      - anatomy: logits (B, 4, H, W) where classes 0..3
     """
-    def __init__(self, in_channels: int = 1, base: int = 32):
+    def __init__(self, in_channels: int = 1, base: int = 32, out_channels: int = 1):
         super().__init__()
 
         # Encoder
-        self.inc = DoubleConv(in_channels, base)         # H
-        self.down1 = Down(base, base * 2)                # H/2
-        self.down2 = Down(base * 2, base * 4)            # H/4
-        self.down3 = Down(base * 4, base * 8)            # H/8
+        self.inc = DoubleConv(in_channels, base)
+        self.down1 = Down(base, base * 2)
+        self.down2 = Down(base * 2, base * 4)
+        self.down3 = Down(base * 4, base * 8)
 
-        # Bottleneck conv before LSTM
         self.bot_conv = DoubleConv(base * 8, base * 8)
 
-        # ConvLSTM at bottleneck
         self.convlstm = ConvLSTMCell(input_dim=base * 8, hidden_dim=base * 8, kernel_size=3)
 
-# Decoder: (up_channels, skip_channels, out_channels)
+        # Decoder
         self.up1 = Up(base * 8, base * 4, base * 4)
         self.up2 = Up(base * 4, base * 2, base * 2)
         self.up3 = Up(base * 2, base, base)
-        self.outc = nn.Conv2d(base, 1, kernel_size=1)
 
+        self.outc = nn.Conv2d(base, out_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert x.dim() == 5, f"Expected (B,T,C,H,W), got {tuple(x.shape)}"
         B, T, C, H, W = x.shape
         device = x.device
 
-        # We'll store skips from the last frame only (causal real-time)
         skip1 = skip2 = skip3 = None
-
-        # Init ConvLSTM state at bottleneck resolution (H/8, W/8)
         h, c = self.convlstm.init_state(B, (H // 8, W // 8), device=device)
 
         for t in range(T):
-            xt = x[:, t]  # (B,C,H,W)
+            xt = x[:, t]
 
-            x1 = self.inc(xt)          # (B,base,H,W)
-            x2 = self.down1(x1)        # (B,2base,H/2,W/2)
-            x3 = self.down2(x2)        # (B,4base,H/4,W/4)
-            x4 = self.down3(x3)        # (B,8base,H/8,W/8)
-            x4 = self.bot_conv(x4)     # (B,8base,H/8,W/8)
+            x1 = self.inc(xt)
+            x2 = self.down1(x1)
+            x3 = self.down2(x2)
+            x4 = self.down3(x3)
+            x4 = self.bot_conv(x4)
 
             h, c = self.convlstm(x4, (h, c))
 
             if t == T - 1:
                 skip1, skip2, skip3 = x1, x2, x3
 
-        # Decode using last-frame skips + ConvLSTM hidden state h
-        # h: (B,8base,H/8,W/8)
-        x = self.up1(h, skip3)   # concat => 16base -> 4base
-        x = self.up2(x, skip2)   # 8base -> 2base
-        x = self.up3(x, skip1)   # 4base -> base
-        logits = self.outc(x)    # (B,1,H,W)
+        x = self.up1(h, skip3)
+        x = self.up2(x, skip2)
+        x = self.up3(x, skip1)
+        logits = self.outc(x)
         return logits
