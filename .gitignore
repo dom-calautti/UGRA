@@ -1,4 +1,5 @@
 runs/needle_convlstm/
+runs\anatomy_convlstm
 
 UGRA/data_raw/
 UGRA/data_raw/images/
@@ -11,3 +12,6 @@ data_processed/sanity_overlays/
 data_processed/meta/
 data_processed/masks/needle/
 data_processed/masks/anatomy/
+
+__pycache__/
+*.pyc
