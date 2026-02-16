@@ -1,0 +1,8 @@
+{
+  "best_epoch": 45,
+  "best_val_mean_dice_ex_bg": 0.6671991169222251,
+  "epochs": 50,
+  "arch": "swin_convlstm",
+  "run_dir": "runs\\anatomy_swin_convlstm\\run_20260216_124756_swin_convlstm",
+  "out_root": "runs\\anatomy_swin_convlstm"
+}

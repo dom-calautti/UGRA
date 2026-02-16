@@ -13,6 +13,39 @@ from datasets_temporal import TemporalNeedleDataset, temporal_collate
 from models_convlstm_unet import ConvLSTMUNet
 
 
+def _find_latest_best(default_root: Path) -> Path | None:
+    if not default_root.exists():
+        return None
+
+    run_dirs = sorted(
+        [d for d in default_root.iterdir() if d.is_dir() and d.name.startswith("run_")],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    for d in run_dirs:
+        p = d / "best.pt"
+        if p.exists():
+            return p
+
+    legacy = default_root / "best.pt"
+    if legacy.exists():
+        return legacy
+    return None
+
+
+def _resolve_ckpt_path(user_value: str, default_root: Path) -> Path:
+    if user_value and str(user_value).strip().lower() != "auto":
+        return Path(user_value)
+
+    resolved = _find_latest_best(default_root)
+    if resolved is None:
+        raise FileNotFoundError(
+            f"Could not auto-resolve needle checkpoint from {default_root.resolve()}. Pass --ckpt manually."
+        )
+    print(f"[INFO] auto-selected needle checkpoint: {resolved}")
+    return resolved
+
+
 def read_gray(path: str) -> np.ndarray:
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -32,17 +65,21 @@ def overlay_mask(gray: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 @torch.no_grad()
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default="runs/needle_convlstm/best.pt")
-    ap.add_argument("--meta_dir", default="data_processed/meta")
-    ap.add_argument("--split", choices=["val", "test"], default="val")
-    ap.add_argument("--T", type=int, default=8)
-    ap.add_argument("--base", type=int, default=32)
-    ap.add_argument("--n", type=int, default=12)
-    ap.add_argument("--thr", type=float, default=0.5)
-    ap.add_argument("--out_dir", default="runs/needle_convlstm/debug_preds")
-    ap.add_argument("--postprocess", choices=["none", "largest", "longest"], default="none")
-    ap.add_argument("--min_area", type=int, default=20)
+    ap = argparse.ArgumentParser(
+        description="Save needle GT-vs-pred overlay images for offline debugging.",
+        epilog="Output: PNG files in --out_dir/<split>, each image is [GT | prediction].",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument("--ckpt", default="auto", help='Needle checkpoint path. Use "auto" to pick newest run best.pt.')
+    ap.add_argument("--meta_dir", default="data_processed/meta", help="Folder containing needle sequence manifests.")
+    ap.add_argument("--split", choices=["val", "test"], default="val", help="Split to sample from.")
+    ap.add_argument("--T", type=int, default=8, help="Temporal window length (must match checkpoint training T).")
+    ap.add_argument("--base", type=int, default=32, help="Needle ConvLSTMUNet base channels.")
+    ap.add_argument("--n", type=int, default=12, help="Number of random samples to export.")
+    ap.add_argument("--thr", type=float, default=0.5, help="Needle sigmoid threshold.")
+    ap.add_argument("--out_dir", default="runs/needle_convlstm/debug_preds", help="Output root directory for overlays.")
+    ap.add_argument("--postprocess", choices=["none", "largest", "longest"], default="none", help="Optional binary mask postprocess.")
+    ap.add_argument("--min_area", type=int, default=20, help="Min component area used when postprocess is enabled.")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -61,8 +98,9 @@ def main():
     random.shuffle(idxs)
     idxs = idxs[: min(args.n, len(idxs))]
 
+    ckpt_path = _resolve_ckpt_path(args.ckpt, Path("runs") / "needle_convlstm")
     model = ConvLSTMUNet(in_channels=1, base=args.base).to(device)
-    ckpt = torch.load(args.ckpt, map_location=device)
+    ckpt = torch.load(str(ckpt_path), map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval()
 

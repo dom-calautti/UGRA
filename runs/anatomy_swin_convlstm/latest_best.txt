@@ -1,0 +1,1 @@
+runs\anatomy_swin_convlstm\run_20260216_124756_swin_convlstm\best.pt

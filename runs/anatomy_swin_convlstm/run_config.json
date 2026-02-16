@@ -1,0 +1,63 @@
+{
+  "args": {
+    "meta_dir": "data_processed/meta",
+    "out_dir": "runs\\anatomy_swin_convlstm",
+    "train_split": "train",
+    "val_split": "val",
+    "epochs": 50,
+    "batch_size": 1,
+    "lr": 0.0002,
+    "T": 5,
+    "amp": true,
+    "device": "cuda",
+    "num_workers": 0,
+    "class_weights": "",
+    "arch": "swin_convlstm",
+    "convlstm_base": 32,
+    "loss": "dicece",
+    "lambda_dice": 1.0,
+    "lambda_ce": 1.0,
+    "calc_class_weights": false,
+    "calc_max_samples": 2000,
+    "img_size": 256,
+    "patch_size": 4,
+    "swin_embed_dim": 48,
+    "swin_window_size": 8,
+    "use_checkpoint": true,
+    "seed": 0
+  },
+  "model_cfg": {
+    "in_channels": 1,
+    "out_channels": 4,
+    "img_size": 256,
+    "patch_size": 4,
+    "swin_embed_dim": 48,
+    "swin_depths": [
+      2,
+      2,
+      6,
+      2
+    ],
+    "swin_num_heads": [
+      3,
+      6,
+      12,
+      24
+    ],
+    "swin_window_size": [
+      8,
+      8
+    ],
+    "drop_rate": 0.0,
+    "attn_drop_rate": 0.0,
+    "dropout_path_rate": 0.0,
+    "use_checkpoint": true,
+    "convlstm_kernel": 3
+  },
+  "train_manifest": "data_processed\\meta\\sequences_anatomy_train.json",
+  "val_manifest": "data_processed\\meta\\sequences_anatomy_val.json",
+  "device": "cuda",
+  "class_weights": null,
+  "run_dir": "runs\\anatomy_swin_convlstm\\run_20260216_124756_swin_convlstm",
+  "out_root": "runs\\anatomy_swin_convlstm"
+}

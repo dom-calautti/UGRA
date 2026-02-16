@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -49,6 +50,8 @@ class ConvLSTMCell(nn.Module):
     Standard ConvLSTM cell:
       input:  (B, C_in, H, W)
       state:  h,c each (B, C_hidden, H, W)
+
+    NOTE: bias=False to avoid AMP dtype mismatch (fp16 activations vs fp32 bias).
     """
     def __init__(self, input_dim: int, hidden_dim: int, kernel_size: int = 3):
         super().__init__()
@@ -59,13 +62,21 @@ class ConvLSTMCell(nn.Module):
             out_channels=4 * hidden_dim,
             kernel_size=kernel_size,
             padding=padding,
-            bias=True,
+            bias=False,   # <-- IMPORTANT
         )
 
     def forward(self, x, state):
         h, c = state
+
+        # Keep state dtype aligned with x under AMP
+        if h.dtype != x.dtype:
+            h = h.to(dtype=x.dtype)
+        if c.dtype != x.dtype:
+            c = c.to(dtype=x.dtype)
+
         combined = torch.cat([x, h], dim=1)  # (B, C_in + C_hid, H, W)
         gates = self.conv(combined)
+
         i, f, o, g = torch.chunk(gates, 4, dim=1)
         i = torch.sigmoid(i)
         f = torch.sigmoid(f)
@@ -81,6 +92,7 @@ class ConvLSTMCell(nn.Module):
         h = torch.zeros(batch_size, self.hidden_dim, H, W, device=device)
         c = torch.zeros(batch_size, self.hidden_dim, H, W, device=device)
         return h, c
+
 
 
 class ConvLSTMUNet(nn.Module):

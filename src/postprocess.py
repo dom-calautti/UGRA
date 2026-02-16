@@ -67,3 +67,31 @@ def keep_one_component(
 
     out = (labels == best_id).astype(np.uint8)
     return out
+
+
+def keep_one_component_per_class(
+    mask_cls: np.ndarray,
+    class_ids=(1, 2, 3),
+    mode: str = "largest",
+    min_area_by_class: dict[int, int] | None = None,
+) -> np.ndarray:
+    """
+    mask_cls: HxW class mask (0..C-1)
+    class_ids: classes to postprocess independently
+    mode: "largest" or "longest" (delegated to keep_one_component)
+    min_area_by_class: optional per-class min area thresholds
+    """
+    out = np.zeros_like(mask_cls, dtype=np.int64)
+    mins = min_area_by_class or {}
+
+    for class_id in class_ids:
+        class_id = int(class_id)
+        class_bin = (mask_cls == class_id).astype(np.uint8)
+        keep = keep_one_component(
+            class_bin,
+            mode=mode,
+            min_area=int(mins.get(class_id, 20)),
+        )
+        out[keep > 0] = class_id
+
+    return out

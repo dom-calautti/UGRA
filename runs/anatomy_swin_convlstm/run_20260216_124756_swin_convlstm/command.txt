@@ -1,0 +1,1 @@
+C:\Users\domen\Miniconda3\envs\ugra\python.exe src/train_anatomy_temporal.py --amp --epochs 50 --T 5 --batch_size 1 --lr 2e-4 --arch swin_convlstm --swin_embed_dim 48 --swin_window_size 8 --use_checkpoint --loss dicece --lambda_dice 1.0 --lambda_ce 1.0 --out_dir runs\anatomy_swin_convlstm
