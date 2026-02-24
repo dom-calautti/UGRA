@@ -16,3 +16,6 @@ data_processed/masks/anatomy/
 
 __pycache__/
 *.pyc
+
+*.png
+run_*/
