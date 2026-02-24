@@ -41,6 +41,10 @@ def warmup_anatomy_model(model: torch.nn.Module, device: torch.device, t: int, i
 def _read_json(path: Path):
     if not path.exists():
         return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _find_latest_best(default_root: Path) -> Path | None:
@@ -57,9 +61,6 @@ def _find_latest_best(default_root: Path) -> Path | None:
         if p.exists():
             return p
 
-    legacy = default_root / "best.pt"
-    if legacy.exists():
-        return legacy
     return None
 
 
@@ -75,10 +76,6 @@ def _resolve_ckpt_path(user_value: str, default_root: Path, label: str) -> Path:
         )
     print(f"[INFO] auto-selected {label} checkpoint: {resolved}")
     return resolved
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
 
 
 def _normalize_window_scalar(v):
@@ -111,6 +108,19 @@ def _extract_ckpt_cfg(ckpt_path: Path):
             cfg["model_cfg"].update(run_cfg["model_cfg"])
 
     return cfg
+
+
+def _resolve_temporal_window(cli_value: int, ckpt_cfg: dict, label: str) -> int:
+    if int(cli_value) > 0:
+        return int(cli_value)
+    t_ckpt = ckpt_cfg.get("args", {}).get("T")
+    if t_ckpt is not None and int(t_ckpt) > 0:
+        resolved = int(t_ckpt)
+        print(f"[INFO] auto-resolved {label}_window={resolved} from checkpoint config")
+        return resolved
+    raise ValueError(
+        f"Could not auto-resolve {label}_window from checkpoint metadata. Pass --{label}_window explicitly."
+    )
 
 
 def _validate_compatibility(args, needle_ckpt_path: Path, anat_ckpt_path: Path):
@@ -243,8 +253,8 @@ def main():
     )
     ap.add_argument("--video_id", type=int, default=8, help="Video id to loop from data_raw/images (default: 8).")
 
-    ap.add_argument("--needle_window", type=int, default=8, help="Needle temporal window length (must match needle training T).")
-    ap.add_argument("--anat_window", type=int, default=4, help="Anatomy temporal window length (must match anatomy training T).")
+    ap.add_argument("--needle_window", type=int, default=0, help="Needle temporal window length. Use 0 to auto-match checkpoint T.")
+    ap.add_argument("--anat_window", type=int, default=0, help="Anatomy temporal window length. Use 0 to auto-match checkpoint T.")
 
     ap.add_argument("--images_dir", type=str, default=r"data_raw\images", help="Input frames folder.")
     ap.add_argument("--processed_dir", type=str, default=r"data_processed", help="Processed folder used for optional GT overlays.")
@@ -283,6 +293,11 @@ def main():
         raise FileNotFoundError(f"Needle checkpoint not found: {needle_ckpt_path.resolve()}")
     if not anat_ckpt_path.exists():
         raise FileNotFoundError(f"Anatomy checkpoint not found: {anat_ckpt_path.resolve()}")
+
+    needle_cfg = _extract_ckpt_cfg(needle_ckpt_path)
+    anatomy_cfg = _extract_ckpt_cfg(anat_ckpt_path)
+    args.needle_window = _resolve_temporal_window(args.needle_window, needle_cfg, label="needle")
+    args.anat_window = _resolve_temporal_window(args.anat_window, anatomy_cfg, label="anat")
 
     _validate_compatibility(args, needle_ckpt_path, anat_ckpt_path)
 

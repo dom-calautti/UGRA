@@ -71,6 +71,25 @@ def evaluate(model, loader, device, thr: float) -> float:
     return score
 
 
+def _infer_t_from_manifest(json_path: Path) -> int | None:
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    first = data[0]
+    if not isinstance(first, dict):
+        return None
+    frames = first.get("frame_paths")
+    if not isinstance(frames, list):
+        frames = first.get("frames")
+    if not isinstance(frames, list):
+        return None
+    t = len(frames)
+    return int(t) if t > 0 else None
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Train temporal needle segmentation model (ConvLSTMUNet).",
@@ -84,7 +103,7 @@ def main():
     ap.add_argument("--batch_size", type=int, default=1, help="Training batch size.")
     ap.add_argument("--lr", type=float, default=2e-4, help="Learning rate for AdamW.")
 
-    ap.add_argument("--T", type=int, default=8, help="Temporal window length.")
+    ap.add_argument("--T", type=int, default=0, help="Temporal window length. Use 0 to auto-match preprocess manifest sequence length.")
     ap.add_argument("--base", type=int, default=32, help="ConvLSTMUNet base channels.")
 
     ap.add_argument("--num_workers", type=int, default=0, help="DataLoader worker count.")
@@ -109,6 +128,13 @@ def main():
 
     if not train_json.exists():
         raise FileNotFoundError(f"Missing train manifest: {train_json.resolve()}")
+
+    if int(args.T) <= 0:
+        inferred_t = _infer_t_from_manifest(train_json)
+        if inferred_t is None:
+            raise ValueError("Could not auto-infer T from train manifest. Pass --T explicitly.")
+        args.T = int(inferred_t)
+        print(f"[INFO] auto-resolved T={args.T} from {train_json.name}")
 
     ds_train = make_needle_dataset(train_json, expected_T=args.T, normalize=True, cache_rate=args.cache_rate, keep_all=True)
 
@@ -153,10 +179,8 @@ def main():
         "save_root": str(save_root),
     }
     (run_dir / "run_config.json").write_text(json.dumps(run_config, indent=2), encoding="utf-8")
-    (save_root / "run_config.json").write_text(json.dumps(run_config, indent=2), encoding="utf-8")
     command_line = subprocess.list2cmdline([sys.executable, *sys.argv])
     (run_dir / "command.txt").write_text(command_line + "\n", encoding="utf-8")
-    (save_root / "latest_command.txt").write_text(command_line + "\n", encoding="utf-8")
 
     model = ConvLSTMUNet(in_channels=1, base=args.base, out_channels=1).to(device)
 
@@ -175,8 +199,6 @@ def main():
     best_epoch = 0
     best_path = run_dir / "best.pt"
     last_path = run_dir / "last.pt"
-    root_best_path = save_root / "best.pt"
-    root_last_path = save_root / "last.pt"
     metrics_csv = run_dir / "metrics.csv"
     history: list[dict] = []
 
@@ -213,7 +235,6 @@ def main():
         # save last
         last_obj = {"model": model.state_dict(), "epoch": epoch, "args": vars(args)}
         torch.save(last_obj, last_path)
-        torch.save(last_obj, root_last_path)
 
         val_dice = None
 
@@ -227,8 +248,6 @@ def main():
                 best_epoch = epoch
                 best_obj = {"model": model.state_dict(), "epoch": epoch, "val_dice": best_val, "args": vars(args)}
                 torch.save(best_obj, best_path)
-                torch.save(best_obj, root_best_path)
-                (save_root / "latest_best.txt").write_text(str(best_path), encoding="utf-8")
                 print(f"[SAVE] best checkpoint -> {best_path}")
 
         history.append(
